@@ -23,3 +23,7 @@ __pycache__/
 *.log
 .env
 .env.*
+
+# Local Playwright run output
+/web/test-results/
+/web/playwright-report/
