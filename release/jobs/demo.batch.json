@@ -1,0 +1,27 @@
+{
+  "schema": "archisection.batch/1",
+  "scenePath": "../../fixtures/demo-building.json",
+  "cuts": [
+    {
+      "id": "demo-plan-z15",
+      "normal": [0, 0, 1],
+      "offset": 1.5,
+      "includeSegments": true,
+      "output": "demo/plan-z15.json"
+    },
+    {
+      "id": "demo-plan-z20",
+      "normal": [0, 0, 1],
+      "offset": 2.0,
+      "includeSegments": true,
+      "output": "demo/plan-z20.json"
+    },
+    {
+      "id": "demo-section-x",
+      "normal": [1, 0, 0],
+      "offset": 4.0,
+      "includeSegments": true,
+      "output": "demo/section-x4.json"
+    }
+  ]
+}

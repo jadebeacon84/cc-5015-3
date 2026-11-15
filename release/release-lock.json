@@ -1,0 +1,50 @@
+{
+  "schema": "archisection.release-lock/1",
+  "tool": "archisection",
+  "version": "0.1.0",
+  "generatedAt": "unix:1794764287",
+  "rustToolchain": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+  "dependencies": {
+    "axum": "0.8",
+    "earcutr": "0.5",
+    "serde": "{ version = \"1\", features = [\"derive\"] }",
+    "serde_json": "1",
+    "tokio": "{ version = \"1\", features = [\"rt-multi-thread\", \"macros\", \"net\"] }",
+    "tower-http": "{ version = \"0.6\", features = [\"fs\", \"cors\", \"trace\"] }"
+  },
+  "pinnedFixtures": [
+    {
+      "path": "fixtures/demo-building.json",
+      "sha256": "40f3dd10abc10e8e19c865833ba891d7dd044ea8b6fb6da2f40d26a97e041c34",
+      "bytes": 9193
+    },
+    {
+      "path": "fixtures/edge-cases.json",
+      "sha256": "9e3cb672fdf7687df917ed8d8e4afbc41581465e89a81bf7889e8f2216b2675b",
+      "bytes": 1266
+    },
+    {
+      "path": "fixtures/open-shell.json",
+      "sha256": "6999bc3d924257a33b26d4784ac700f911de53dab411e5bef4efbca831259e46",
+      "bytes": 2468
+    }
+  ],
+  "tolerance": {
+    "angular": 1e-9,
+    "linearRule": "tol = clamp(diagonal * 1e-7, 1e-9, 1e-2) in model units",
+    "noNearestEndpointJoins": true,
+    "onPlanePredicate": "abs(dot(n,p) - d) <= tol",
+    "shortSegmentRule": "segments shorter than 4*tol are dropped and counted"
+  },
+  "acceptance": {
+    "edgeCases": [
+      "plane through mesh vertices",
+      "coplanar triangles",
+      "open shell"
+    ],
+    "failureGating": "a non-zero CLI exit blocks promotion into the release directory",
+    "kernelTests": "cargo test --release",
+    "uiEntry": "./start.sh then open the printed URL",
+    "verify": "section-server verify --result <file> --require-closed"
+  }
+}

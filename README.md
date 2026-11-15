@@ -45,7 +45,7 @@ STATIC_DIR=web/dist PORT=8787 ./server/target/release/section-server
 
 > 若容器内 Rust 链接失败（`/usr/local/bin/cc` 是入口包装器），仓库内已提供 `server/.cargo/config.toml` 将链接器固定为 `/usr/bin/gcc`；如仍报错，可显式设置 `CC=/usr/bin/gcc HOST_CC=/usr/bin/gcc`。
 
-### 方式 B：开发模式（前端热更新）
+### 方式 C：开发模式（前端热更新）
 
 ```bash
 # 终端 1：只跑内核服务
@@ -99,6 +99,7 @@ npm run dev              # http://127.0.0.1:5173
 
 ### 轮廓连接
 节点按**拓扑与几何**双重键控：`(对象, 顶点枚举 | 规范化边对)`，并在容差内用空间哈希合并接缝。闭合环、开放链、孔洞分别表示；嵌套判定采用“最大优先 + 严格包含”，仅边界接触会标为 `contourTouchAmbiguous`。
+平面恰好穿过网格边时会出现度 4 非流形节点：内核先为每个节点预算**对称的线段配对**（同组优先、再按直线度），再沿固定配对追踪，避免贪心追踪把闭合环错拆成开放链；非度 2 节点会写入 `nonManifoldJunction` 诊断。
 开放网格留下的未闭合链会以开放链输出（红色虚线 + 两端圆点），**不伪造面积、不生成封口**，并写入 `openChain` 诊断。
 
 ### 结果标识与确定性
@@ -147,27 +148,74 @@ npm run dev              # http://127.0.0.1:5173
 | --- | --- |
 | `fixtures/demo-building.json` | 双房间带内腔（孔洞）、非均匀缩放 0.12 的薄隔墙、30° 旋转塔楼、独立附属体、共面雨篷 |
 | `fixtures/open-shell.json` | 缺一面墙的开放房间 + 完整对照体：平面切出开放链，保留诊断且不伪造面积 |
+| `fixtures/edge-cases.json` | 平面恰好穿过立方体顶点/边的 `vertex-touch-box`，以及四块扇形三角片共面的 `coplanar-canopy`：临界输入必须保持闭合轮廓、共面片只输出一条外轮廓 |
 
-内核回归测试（21 项，含带洞体、相切平面、薄墙、多分量、镜像、确定性）：`cd server && cargo test`。
-浏览器端到端测试（10 项，驱动真实内核与界面）：`cd web && npm run test:e2e`。
+内核回归测试（30 项 = 内核 17 + 示例场景 4 + 临界输入 4 + CLI 端到端 5，含带洞体、相切平面、薄墙、多分量、镜像、确定性、非流形度 4 节点配对追踪）：`cd server && cargo test`。
+浏览器端到端测试（10 项，驱动真实内核与界面，含拖拽移动剖切平面后实时重算）：`cd web && npm run test:e2e`。
+
+> 无图形界面的环境里运行 Playwright 需要补齐浏览器系统库；非 root 环境可把对应 deb 解包到本地目录后设置 `LD_LIBRARY_PATH`（无需写系统目录）。
 
 截图证据见 `web/artifacts/`（默认剖面、拖拽后、选中来源高亮、冻结、开放链）。
 
 ---
 
-## 7. 目录结构
+## 7. 命令行（仅辅助图形界面）
+
+**模型剖切的图形入口是第 1 节的浏览器视窗**（`./start.sh` 后打开打印的 URL）：在视窗里拖拽平面、查看轮廓与封口、冻结导出。下面的 CLI 只是把同一个内核用于后台批处理与发布流水线，不替代图形界面。
+
+```bash
+section-server serve [--port N] [--static-dir DIR]   # 启动图形视窗服务（无参数时默认即此命令）
+section-server section --scene model.json --normal 0,0,1 --offset 1.5 --out result.json
+section-server batch  --job job.json --out-dir DIR [--require-closed]
+section-server verify --result result.json [--require-closed]
+section-server lock   --repo-root . --out release/release-lock.json [--check]
+```
+
+- `section` / `batch` 的产物为原子写入（临时文件 + 改名）；剖切失败时**不会**留下结果文件，命令以非零码退出，失败产物无法进入发布目录。
+- `batch` 读取 `archisection.batch/1` 任务文档，写出 `archisection.batch-report/1` 报告；每个成功结果附带 `archisection.result-manifest/1` 清单（resultId、SHA-256、字节数、平面、容差）。
+- `verify` 会**重新加载**结果文件，校验法向单位化、轮廓/封口顶点在平面上、闭合环面积有限、封口引用的外轮廓存在且三角面非空；`--require-closed` 下开放链直接拒绝。
+- `lock` 生成发布锁（`archisection.release-lock/1`），固化依赖版本、容差规则、验收标准与 fixtures 的 SHA-256；`--check` 发现漂移即以非零码退出。
+
+批处理包装脚本：`scripts/batch.sh <job.json> [out-dir] [--require-closed]`（二进制缺失时自动构建）。
+
+---
+
+## 8. 发布流水线（构建、校验、原子发布）
+
+`scripts/release.sh` 把**图形剖切视窗与后台批处理联合发布**到 `release/current/`，全程 `set -euo pipefail`，任何一步失败都在触碰发布目录前中止：
+
+1. 冷启动：删除 `server/target/release` 与 `web/dist` 后重新构建二进制和前端；
+2. 运行全部 30 项 Rust 测试（含穿顶点、共面三角片临界输入），不以默认值掩盖错误；
+3. 重新生成发布锁并与已提交的 `release/release-lock.json` 做 `--check` 比对；
+4–5. 在临时暂存目录跑临界输入与示例模型的后台批处理；
+6. 对每个结果执行 `verify --require-closed`，并核对清单文件存在、哈希匹配（闭合轮廓与网格校验均对应真实执行证据）；
+7. **失败闸门**：开放壳任务必须非零退出，且目录里只能留下 `batch-report.json`，证明失败剖切不会产生可用产物；
+8. 组装 `bin/ ui/ fixtures/ jobs/ start.sh batch.sh`，在暂存目录内冷启动服务做 curl 冒烟（健康检查、首页与视窗 JS 包均可下载），通过后才把暂存目录**原子改名**为 `release/current`（旧版本保留为 `release/previous`）。
+
+发布任务与测试模型锁定在仓库中：`release/jobs/*.batch.json`、`release/release-lock.json`、`fixtures/*.json`；生成物（`release/current`、`release/previous`、暂存目录、批处理输出）已在 `.gitignore` 中忽略。
+
+---
+
+## 9. 目录结构
 
 ```
 server/            Rust 内核与 HTTP 服务
   src/math.rs        向量/平面/容差
   src/model.rs       场景解析、矩阵烘焙、校验
-  src/section.rs     剖切内核（拓扑节点、追踪、嵌套、封口、诊断）
-  tests/             内核与示例场景回归
+  src/section.rs     剖切内核（拓扑节点、配对追踪、嵌套、封口、诊断）
+  src/cli.rs         辅助 CLI：section/batch/verify/lock，原子写入与发布锁
+  src/main.rs        HTTP 启动（serve_http），向库内注入 serve 入口
+  tests/             内核、示例场景、临界输入、CLI 端到端回归
   examples/          生成内置示例场景
 web/               前端（Three.js + Vite）
   src/viewport.js    3D 视窗、平面拖拽、轮廓/封口/原面高亮
   src/main.js        控件与状态、冻结、失败反馈
   src/export.js      JSON/DXF/CSV 导出
   e2e/               Playwright 端到端测试
-fixtures/          示例场景
+scripts/           release.sh（联合发布流水线）、batch.sh（批处理包装）
+release/
+  jobs/              已锁定的批处理任务（临界输入 / 示例 / 失败闸门）
+  release-lock.json  依赖、容差规则、验收标准、fixture 哈希
+  current/           流水线原子发布的当前版本（生成物，git 忽略）
+fixtures/          示例与临界输入场景
 ```

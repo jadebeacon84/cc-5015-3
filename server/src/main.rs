@@ -3,12 +3,14 @@ use axum::http::{HeaderValue, Method, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use section_kernel::cli;
 use section_kernel::model::WorldScene;
 use section_kernel::section::{build_section, SectionRequest};
 use serde::Deserialize;
 use serde_json::json;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::process::ExitCode;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
@@ -180,47 +182,88 @@ fn fnv1a64(bytes: &str) -> u64 {
     hash
 }
 
-#[tokio::main]
-async fn main() {
-    let port: u16 = std::env::var("PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
+/// HTTP/UI server. Invoked by the `serve` sub-command and by the legacy
+/// no-argument entry point so `start.sh` keeps working unchanged.
+pub fn serve_http(args: &[String]) -> ExitCode {
+    let mut port: Option<u16> = None;
+    let mut static_dir: Option<PathBuf> = None;
+    let mut i = 0;
+    while i < args.len() {
+        let value = || args.get(i + 1).cloned().unwrap_or_default();
+        match args[i].as_str() {
+            "--port" => {
+                port = value().parse().ok();
+                i += 2;
+            }
+            "--static-dir" => {
+                static_dir = Some(PathBuf::from(value()));
+                i += 2;
+            }
+            other => {
+                eprintln!("unknown serve flag: {other}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    let port = port
+        .or_else(|| std::env::var("PORT").ok().and_then(|p| p.parse().ok()))
         .unwrap_or(8787);
-    let static_dir = std::env::var("STATIC_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("web/dist"));
+    let static_dir = static_dir
+        .or_else(|| std::env::var("STATIC_DIR").ok().map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("web/dist"));
 
-    let store = Store::default();
-    let cors = CorsLayer::new()
-        .allow_methods([Method::GET, Method::POST])
-        .allow_origin(HeaderValue::from_static("*"));
+    let rt = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("failed to start async runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    rt.block_on(async move {
+        let store = Store::default();
+        let cors = CorsLayer::new()
+            .allow_methods([Method::GET, Method::POST])
+            .allow_origin(HeaderValue::from_static("*"));
 
-    let mut app = Router::new()
-        .route("/api/health", get(health))
-        .route("/api/scene", post(load_scene))
-        .route("/api/section", post(section))
-        .layer(DefaultBodyLimit::max(128 * 1024 * 1024))
-        .layer(cors)
-        .with_state(store);
+        let mut app = Router::new()
+            .route("/api/health", get(health))
+            .route("/api/scene", post(load_scene))
+            .route("/api/section", post(section))
+            .layer(DefaultBodyLimit::max(128 * 1024 * 1024))
+            .layer(cors)
+            .with_state(store);
 
-    if static_dir.is_dir() {
-        // Serve the built UI and fall back to index.html for the SPA.
-        let index = static_dir.join("index.html");
-        app = app.fallback_service(
-            ServeDir::new(&static_dir).not_found_service(ServeFile::new(index)),
-        );
+        if static_dir.is_dir() {
+            // Serve the built UI and fall back to index.html for the SPA.
+            let index = static_dir.join("index.html");
+            app = app.fallback_service(
+                ServeDir::new(&static_dir).not_found_service(ServeFile::new(index)),
+            );
+        }
+
+        let addr = SocketAddr::from(([0, 0, 0, 0], port));
+        println!("archisection kernel listening on http://{addr}");
+        if static_dir.is_dir() {
+            println!("serving UI from {}", static_dir.display());
+        } else {
+            println!(
+                "UI directory {} not found; API is available at /api (run `npm run build` in web/)",
+                static_dir.display()
+            );
+        }
+        let listener = tokio::net::TcpListener::bind(addr).await.expect("bind port");
+        axum::serve(listener, app).await.expect("server");
+    });
+    ExitCode::SUCCESS
+}
+
+fn main() -> ExitCode {
+    section_kernel::cli::install_serve(serve_http);
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.is_empty() {
+        // Backwards-compatible default: the launcher script historically ran
+        // the binary with no arguments to get the combined API + UI server.
+        return serve_http(&argv);
     }
-
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    println!("archisection kernel listening on http://{addr}");
-    if static_dir.is_dir() {
-        println!("serving UI from {}", static_dir.display());
-    } else {
-        println!(
-            "UI directory {} not found; API is available at /api (run `npm run build` in web/)",
-            static_dir.display()
-        );
-    }
-    let listener = tokio::net::TcpListener::bind(addr).await.expect("bind port");
-    axum::serve(listener, app).await.expect("server");
+    cli::run(&argv)
 }

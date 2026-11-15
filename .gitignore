@@ -27,3 +27,10 @@ __pycache__/
 # Local Playwright run output
 /web/test-results/
 /web/playwright-report/
+
+# Release engineering outputs: jobs/ and release-lock.json are committed;
+# generated releases and transient staging dirs are not.
+/release/current/
+/release/previous/
+/release/.stage.*/
+/release/batch-output/

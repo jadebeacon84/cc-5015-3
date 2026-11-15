@@ -22,7 +22,7 @@ pub struct SectionRequest {
     pub include_segments: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaneOut {
     pub normal: [f64; 3],
@@ -31,10 +31,10 @@ pub struct PlaneOut {
     pub basis_u: [f64; 3],
     pub basis_v: [f64; 3],
     pub basis_crosses_normal: bool,
-    pub definition: &'static str,
+    pub definition: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UnitOut {
     pub name: String,
@@ -42,7 +42,7 @@ pub struct UnitOut {
     pub area_unit: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BoundsOut {
     pub min: [f64; 3],
@@ -50,15 +50,15 @@ pub struct BoundsOut {
     pub diagonal: f64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToleranceOut {
     pub linear: f64,
     pub angular: f64,
-    pub rules: Vec<&'static str>,
+    pub rules: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FaceRef {
     pub object_id: String,
@@ -66,7 +66,7 @@ pub struct FaceRef {
     pub triangle_index: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SegmentOut {
     pub a: [f64; 2],
@@ -76,7 +76,7 @@ pub struct SegmentOut {
     pub sources: Vec<FaceRef>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContourOut {
     pub id: String,
@@ -99,7 +99,7 @@ pub struct ContourOut {
     pub diagnostics: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CapOut {
     pub id: String,
@@ -115,7 +115,7 @@ pub struct CapOut {
     pub face_refs: Vec<FaceRef>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Diagnostic {
     pub code: String,
@@ -127,7 +127,7 @@ pub struct Diagnostic {
     pub contour_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StatsOut {
     pub input_triangles: usize,
@@ -146,14 +146,14 @@ pub struct StatsOut {
     pub crossing_edge_emitted: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SectionResult {
-    pub schema: &'static str,
+    pub schema: String,
     pub result_id: String,
     pub scene_name: String,
     pub unit: UnitOut,
-    pub coordinate_system: &'static str,
+    pub coordinate_system: String,
     pub bounds: BoundsOut,
     pub plane: PlaneOut,
     pub tolerance: ToleranceOut,
@@ -166,7 +166,7 @@ pub struct SectionResult {
     pub on_plane_face_refs: Vec<FaceRef>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ObjectOut {
     pub id: String,
@@ -696,6 +696,11 @@ pub fn build_section(req: &SectionRequest, scene: &WorldScene) -> Result<Section
     }
 
     // --- tracing --------------------------------------------------------
+    // Pair incident segments at every node before walking. A plane that passes
+    // exactly through a mesh edge produces a degree-4 junction (the two
+    // triangles on each side of the edge meet there); pairing the straightest
+    // continuations once, up front, makes the walk deterministic and prevents
+    // a closed ring from being split into two open chains at the junction.
     let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); nodes.nodes.len()];
     for (si, s) in segs.segs.iter().enumerate() {
         adjacency[s.a].push(si);
@@ -704,6 +709,11 @@ pub fn build_section(req: &SectionRequest, scene: &WorldScene) -> Result<Section
     for list in adjacency.iter_mut() {
         list.sort_unstable();
     }
+    let pair_at: Vec<HashMap<usize, usize>> = adjacency
+        .iter()
+        .enumerate()
+        .map(|(node, inc)| pair_incidents(node, inc, &segs.segs, &nodes.nodes))
+        .collect();
     let mut used = vec![false; segs.segs.len()];
     let mut loops: Vec<LoopBuild> = Vec::new();
     let mut starts: Vec<usize> = adjacency
@@ -714,9 +724,10 @@ pub fn build_section(req: &SectionRequest, scene: &WorldScene) -> Result<Section
         .collect();
     starts.sort_unstable();
     for start in starts {
-        trace(
+        trace_paired(
             start,
             &adjacency,
+            &pair_at,
             &segs.segs,
             &nodes.nodes,
             &mut used,
@@ -725,9 +736,10 @@ pub fn build_section(req: &SectionRequest, scene: &WorldScene) -> Result<Section
     }
     for start in 0..nodes.nodes.len() {
         if adjacency[start].iter().any(|&si| !used[si]) {
-            trace(
+            trace_paired(
                 start,
                 &adjacency,
+                &pair_at,
                 &segs.segs,
                 &nodes.nodes,
                 &mut used,
@@ -901,7 +913,7 @@ pub fn build_section(req: &SectionRequest, scene: &WorldScene) -> Result<Section
         .collect::<Vec<_>>();
 
     let mut result = SectionResult {
-        schema: "archisection.result/1",
+        schema: "archisection.result/1".into(),
         result_id: String::new(),
         scene_name: scene.name.clone(),
         unit: UnitOut {
@@ -909,7 +921,7 @@ pub fn build_section(req: &SectionRequest, scene: &WorldScene) -> Result<Section
             meters_per_unit: scene.meters_per_unit,
             area_unit: "m2".into(),
         },
-        coordinate_system: "Right-handed world coordinates. +X right, +Y forward, +Z up. Lengths are in the scene model unit.",
+        coordinate_system: "Right-handed world coordinates. +X right, +Y forward, +Z up. Lengths are in the scene model unit.".into(),
         bounds: BoundsOut {
             min: vec3_arr(scene.aabb.min),
             max: vec3_arr(scene.aabb.max),
@@ -922,19 +934,19 @@ pub fn build_section(req: &SectionRequest, scene: &WorldScene) -> Result<Section
             basis_u: vec3_arr(u),
             basis_v: vec3_arr(v),
             basis_crosses_normal: u.cross(v).sub(n).length() <= 1e-9,
-            definition: "Plane: dot(normal, p) = offset, with a unit normal. In-plane coordinates: points2d[i] = (points3d[i] - origin) . (basis_u, basis_v). basis_u x basis_v = normal. All lengths use the stated model unit.",
+            definition: "Plane: dot(normal, p) = offset, with a unit normal. In-plane coordinates: points2d[i] = (points3d[i] - origin) . (basis_u, basis_v). basis_u x basis_v = normal. All lengths use the stated model unit.".into(),
         },
         tolerance: ToleranceOut {
             linear: tol.linear,
             angular: tol.angular,
             rules: vec![
-                "A vertex is on the plane when |dot(n,p)-d| <= linear tolerance.",
-                "A triangle with vertices strictly on both sides is 'crossing'; its intersection points are keyed by (object, mesh vertex) or (object, unordered mesh edge), so neighbouring triangles share the exact same node.",
-                "A triangle whose three vertices are all on the plane is 'coplanar'. A coplanar mesh edge is emitted only when its adjacent coplanar triangles do not cancel (interior edges of a patch are never emitted; duplicated coincident faces emit one outline).",
-                "A triangle touching the plane at a vertex or edge without a sign change is 'grazing'. A grazing mesh edge is emitted only if triangles exist on both sides of it, so tangency produces no line.",
-                "Segments shorter than 4x linear tolerance are dropped and counted. Duplicate topological segments are merged and their face sources unioned.",
-                "Ring orientation is normalised by nesting: outer rings CCW and holes CW in the (u,v) basis.",
-                "Contours are connected by shared topological nodes only. At a non-manifold node the walk prefers a segment from the same group, then the straightest continuation. Disconnected components are never joined by nearest endpoints.",
+                "A vertex is on the plane when |dot(n,p)-d| <= linear tolerance.".into(),
+                "A triangle with vertices strictly on both sides is 'crossing'; its intersection points are keyed by (object, mesh vertex) or (object, unordered mesh edge), so neighbouring triangles share the exact same node.".into(),
+                "A triangle whose three vertices are all on the plane is 'coplanar'. A coplanar mesh edge is emitted only when its adjacent coplanar triangles do not cancel (interior edges of a patch are never emitted; duplicated coincident faces emit one outline).".into(),
+                "A triangle touching the plane at a vertex or edge without a sign change is 'grazing'. A grazing mesh edge is emitted only if triangles exist on both sides of it, so tangency produces no line.".into(),
+                "Segments shorter than 4x linear tolerance are dropped and counted. Duplicate topological segments are merged and their face sources unioned.".into(),
+                "Ring orientation is normalised by nesting: outer rings CCW and holes CW in the (u,v) basis.".into(),
+                "Contours are connected by shared topological nodes only. At a non-manifold node the walk prefers a segment from the same group, then the straightest continuation. Disconnected components are never joined by nearest endpoints.".into(),
             ],
         },
         contours: contour_out,
@@ -1043,98 +1055,103 @@ fn seg_groups(seg: &Segment) -> BTreeSet<&str> {
     seg.sources.iter().map(|s| s.group.as_str()).collect()
 }
 
-fn trace(
+/// Pairs incident segments at one node. Each segment is paired with the
+/// continuation a walk should take when it arrives through it. Degree-2 nodes
+/// pair trivially; higher-degree (non-manifold) junctions prefer a segment
+/// from the same group, then the straightest geometric continuation. The
+/// pairing is symmetric, so a single decision governs both walk directions.
+fn pair_incidents(
+    node: usize,
+    inc: &[usize],
+    segments: &[Segment],
+    node_store: &[Node],
+) -> HashMap<usize, usize> {
+    let mut pairs = HashMap::new();
+    if inc.len() < 2 {
+        return pairs;
+    }
+    let mut remaining: Vec<usize> = inc.to_vec();
+    while remaining.len() >= 2 {
+        let si = remaining[0];
+        let in_group = seg_groups(&segments[si]);
+        // Direction the walk is travelling when it reaches `node` through si.
+        let prev = other_end(&segments[si], node);
+        let din = node_store[node].pos3.sub(node_store[prev].pos3);
+        let mut best: Option<(usize, f64)> = None;
+        for &cand in remaining.iter().skip(1) {
+            let next = other_end(&segments[cand], node);
+            let d_out = node_store[next].pos3.sub(node_store[node].pos3);
+            let same_group = seg_groups(&segments[cand])
+                .iter()
+                .any(|g| in_group.contains(g));
+            let straight = din.normalize().dot(d_out.normalize());
+            // Same-group continuations always outrank cross-group ones; within
+            // a class the straightest line wins, ties break by segment id.
+            let rank = if same_group { 10.0 } else { 0.0 } + straight;
+            match best {
+                Some((_, br)) if br >= rank => {}
+                _ => best = Some((cand, rank)),
+            }
+        }
+        let partner = best.expect("a continuation exists while >=2 remain").0;
+        pairs.insert(si, partner);
+        pairs.insert(partner, si);
+        remaining.retain(|&x| x != si && x != partner);
+    }
+    pairs
+}
+
+/// Walks segment chains using the precomputed per-node pairings. Endpoints of
+/// an open mesh start open chains; every other unused segment starts a closed
+/// loop. The fixed pairing means the same junction is resolved identically no
+/// matter which segment reaches it first.
+fn trace_paired(
     start: usize,
     adjacency: &[Vec<usize>],
+    pair_at: &[HashMap<usize, usize>],
     segments: &[Segment],
-    nodes: &[Node],
+    node_store: &[Node],
     used: &mut [bool],
     loops: &mut Vec<LoopBuild>,
 ) {
     loop {
-        let Some(first) = adjacency[start].iter().copied().find(|&si| !used[si]) else {
+        let Some(&first) = adjacency[start].iter().find(|&&si| !used[si]) else {
             return;
         };
         let mut node_ids = vec![start];
         let mut edge_ids = vec![first];
         used[first] = true;
-        let mut prev = start;
         let mut cur = other_end(&segments[first], start);
         let mut closed = false;
         let mut local_diags: Vec<String> = Vec::new();
-        let guard_limit = adjacency.len() + 2;
+        if adjacency[start].len() != 2 {
+            local_diags.push("nonManifoldJunction; straightest paired continuation chosen".into());
+        }
+        let guard_limit = node_store.len() + 2;
         let mut guard = guard_limit;
-        let mut revisit = false;
         while guard > 0 {
             guard -= 1;
             if cur == start {
                 closed = true;
                 break;
             }
-            if node_ids.contains(&cur) {
-                // Self-touching walk (non-manifold): keep it open rather than
-                // claim closure, which would fabricate a bogus area.
-                revisit = true;
-                break;
-            }
             node_ids.push(cur);
-            let avail: Vec<usize> = adjacency[cur]
-                .iter()
-                .copied()
-                .filter(|&si| !used[si])
-                .collect();
-            if avail.is_empty() {
-                break;
-            }
-            let chosen = if avail.len() == 1 {
-                avail[0]
-            } else {
-                // At a non-manifold junction topology alone is ambiguous.
-                // Prefer a segment that continues the current group, then the
-                // straightest continuation; never jump to a distant endpoint.
-                let current_group = seg_groups(&segments[*edge_ids.last().unwrap()]);
-                let same_group: Vec<usize> = avail
-                    .iter()
-                    .copied()
-                    .filter(|&si| {
-                        seg_groups(&segments[si])
-                            .iter()
-                            .any(|g| current_group.contains(g))
-                    })
-                    .collect();
-                let mut pool: Vec<usize> = if same_group.is_empty() {
-                    avail.clone()
-                } else {
-                    local_diags
-                        .push("nonManifoldJunction; same-group continuation preferred".into());
-                    same_group
-                };
-                let din = nodes[cur].pos3.sub(nodes[prev].pos3).normalize();
-                pool.sort_by(|&a, &b| {
-                    let na = other_end(&segments[a], cur);
-                    let nb = other_end(&segments[b], cur);
-                    let da = din.dot(nodes[na].pos3.sub(nodes[cur].pos3).normalize());
-                    let db = din.dot(nodes[nb].pos3.sub(nodes[cur].pos3).normalize());
-                    db.partial_cmp(&da)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                        .then(a.cmp(&b))
-                });
-                local_diags.push(format!(
-                    "nonManifoldJunction; {} alternatives, straightest continuation chosen",
-                    pool.len()
-                ));
-                pool[0]
+            // The node's pairing table names the continuation of the segment
+            // we arrived on. No partner means an open mesh boundary.
+            let incoming = *edge_ids.last().unwrap();
+            let next_seg = match pair_at[cur].get(&incoming) {
+                Some(&si) if !used[si] => si,
+                _ => break,
             };
-            used[chosen] = true;
-            edge_ids.push(chosen);
-            prev = cur;
-            cur = other_end(&segments[chosen], cur);
+            if adjacency[cur].len() != 2 {
+                local_diags.push("nonManifoldJunction; straightest paired continuation chosen".into());
+            }
+            used[next_seg] = true;
+            edge_ids.push(next_seg);
+            cur = other_end(&segments[next_seg], cur);
         }
         if guard == 0 {
             local_diags.push("traceSafetyLimitReached".into());
-        }
-        if revisit {
-            local_diags.push("nonManifoldJunction; walk revisited a node and was left open".into());
         }
 
         let mut sources: Vec<Source> = Vec::new();
@@ -1153,7 +1170,7 @@ fn trace(
         }
         let group = groups
             .iter()
-            .max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)))
+            .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(a.0)))
             .map(|(g, _)| g.clone())
             .unwrap_or_else(|| "default".into());
         if groups.len() > 1 {

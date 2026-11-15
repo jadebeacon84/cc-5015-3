@@ -1,0 +1,14 @@
+{
+  "schema": "archisection.batch/1",
+  "scenePath": "../../fixtures/open-shell.json",
+  "requireClosed": true,
+  "cuts": [
+    {
+      "id": "open-shell-must-fail-gate",
+      "normal": [0, 0, 1],
+      "offset": 0.5,
+      "includeSegments": true,
+      "output": "open-shell/plan-z05.json"
+    }
+  ]
+}

@@ -1,8 +1,8 @@
 use crate::math::{Aabb, Vec3};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Scene {
     #[serde(default)]
     pub schema: Option<String>,
@@ -13,7 +13,7 @@ pub struct Scene {
     pub objects: Vec<ObjectDef>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UnitSpec {
     #[serde(default)]
     pub name: Option<String>,
@@ -21,7 +21,7 @@ pub struct UnitSpec {
     pub meters_per_unit: Option<f64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ObjectDef {
     pub id: String,
     #[serde(default)]
@@ -37,7 +37,7 @@ pub struct ObjectDef {
     pub mesh: MeshDef,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MeshDef {
     pub positions: Vec<f64>,
     pub indices: Vec<u32>,

@@ -1,3 +1,4 @@
+pub mod cli;
 pub mod math;
 pub mod model;
 pub mod section;

@@ -1,0 +1,21 @@
+{
+  "schema": "archisection.batch/1",
+  "scenePath": "../../fixtures/edge-cases.json",
+  "requireClosed": true,
+  "cuts": [
+    {
+      "id": "plane-through-vertices",
+      "normal": [1, -1, 0.25],
+      "offset": 0,
+      "includeSegments": true,
+      "output": "edge-cases/plane-through-vertices.json"
+    },
+    {
+      "id": "coplanar-triangles",
+      "normal": [0, 0, 1],
+      "offset": 3,
+      "includeSegments": true,
+      "output": "edge-cases/coplanar-triangles.json"
+    }
+  ]
+}

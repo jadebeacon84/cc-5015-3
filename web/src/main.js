@@ -38,6 +38,7 @@ app.innerHTML = `
         <select id="fixture-select">
           <option value="demo-building.json">演示建筑（内腔 / 薄墙 / 旋转塔楼）</option>
           <option value="open-shell.json">开放壳体（缺少一面墙）</option>
+          <option value="edge-cases.json">临界输入（穿顶点 / 共面三角片）</option>
         </select>
       </div>
       <div class="btn-row">
